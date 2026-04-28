@@ -1,0 +1,315 @@
+// Wealth Intelligence Platform — PostgreSQL schema
+// Modular: core entities are normalized; type-specific fields live in `details` JSON for API extensibility
+// (stocks, metals, property) without migration churn when adding broker fields later.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Currency {
+  AUD
+  USD
+  INR
+}
+
+enum AssetCategory {
+  STOCK
+  ETF
+  MUTUAL_FUND
+  CRYPTO
+  BOND
+  PROPERTY
+  VEHICLE
+  BANK_ACCOUNT
+  EMERGENCY_FUND
+  SUPERANNUATION
+  GOLD
+  SILVER
+  OTHER
+}
+
+enum ExpenseCategory {
+  FIXED_RENT
+  FIXED_EMI
+  FIXED_INSURANCE
+  FIXED_SUBSCRIPTION
+  VARIABLE_GROCERIES
+  VARIABLE_TRANSPORT
+  VARIABLE_DINING
+  VARIABLE_ENTERTAINMENT
+  VARIABLE_OTHER
+  INCOME
+  TRANSFER
+}
+
+enum LoanType {
+  HOME
+  CAR
+  PERSONAL
+  CREDIT_CARD
+  MARGIN
+  OTHER
+}
+
+enum GoalType {
+  EMERGENCY_FUND
+  HOME_PURCHASE
+  RETIREMENT
+  EDUCATION
+  CUSTOM
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// --- NextAuth (Google OAuth) ---
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String?   @unique
+  emailVerified DateTime?
+  image         String?
+  role          UserRole  @default(USER)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  assets        Asset[]
+  expenses      Expense[]
+  loans         Loan[]
+  goals         Goal[]
+  netSnapshots  NetWorthSnapshot[]
+  taxProfiles   TaxYearProfile[]
+  financialMemory FinancialMemory?
+  alerts        Alert[]
+  capitalLots   CapitalGainLot[]
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// --- Core finance ---
+model Asset {
+  id          String        @id @default(cuid())
+  userId      String
+  category    AssetCategory
+  name        String
+  currency    Currency      @default(AUD)
+  /// Current market value in `currency` (user-entered or refreshed from price APIs)
+  value       Decimal       @db.Decimal(18, 2)
+  costBasis   Decimal?      @db.Decimal(18, 2)
+  purchaseDate DateTime?
+  /// Structured payload: tickers, qty, property loan id, metal weight/purity/classification, etc.
+  details     Json?
+  source      String        @default("MANUAL") // MANUAL | YAHOO | METAL_API | FUTURE_BANK
+  notesEnc    String?       @db.Text // optional AES-GCM ciphertext for sensitive notes
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, category])
+}
+
+model Expense {
+  id          String          @id @default(cuid())
+  userId      String
+  amount      Decimal         @db.Decimal(18, 2)
+  currency    Currency        @default(AUD)
+  category    ExpenseCategory
+  description String?
+  date        DateTime
+  isRecurring Boolean         @default(false)
+  recurrence  String? // e.g. MONTHLY:15 — kept simple; cron-ready later
+  merchant    String?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@index([userId, category])
+}
+
+model Loan {
+  id                 String   @id @default(cuid())
+  userId             String
+  name               String
+  type               LoanType
+  currency           Currency @default(AUD)
+  principalOriginal  Decimal  @db.Decimal(18, 2)
+  principalRemaining Decimal  @db.Decimal(18, 2)
+  interestRateAnnual Decimal  @db.Decimal(8, 4) // e.g. 5.2500 for 5.25%
+  monthlyPayment     Decimal  @db.Decimal(18, 2)
+  startDate          DateTime
+  termMonths         Int
+  /// Extra JSON: offset account id, fixed vs variable, lender name
+  details            Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Goal {
+  id            String   @id @default(cuid())
+  userId        String
+  name          String
+  type          GoalType
+  currency      Currency @default(AUD)
+  targetAmount  Decimal  @db.Decimal(18, 2)
+  currentAmount Decimal  @db.Decimal(18, 2) @default(0)
+  targetDate    DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model NetWorthSnapshot {
+  id           String   @id @default(cuid())
+  userId       String
+  date         DateTime @db.Date
+  totalAssets  Decimal  @db.Decimal(18, 2)
+  totalDebts   Decimal  @db.Decimal(18, 2)
+  netWorth     Decimal  @db.Decimal(18, 2)
+  /// Stored CPI factor or inflation index used for adjustment (optional)
+  inflationFactor Decimal? @db.Decimal(12, 6)
+  currency     Currency @default(AUD)
+  createdAt    DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, date])
+  @@index([userId, date])
+}
+
+/// Australian tax year inputs; extensible to other jurisdictions via `region` later.
+model TaxYearProfile {
+  id     String @id @default(cuid())
+  userId String
+  /// e.g. "2024-25"
+  financialYear String
+  region        String @default("AU")
+
+  salaryIncome      Decimal @default(0) @db.Decimal(18, 2)
+  rentalIncome      Decimal @default(0) @db.Decimal(18, 2)
+  rentalDeductions  Decimal @default(0) @db.Decimal(18, 2) // interest, repairs cap — simplified bucket
+  otherIncome       Decimal @default(0) @db.Decimal(18, 2)
+  workDeductions      Decimal @default(0) @db.Decimal(18, 2)
+  investmentDeductions Decimal @default(0) @db.Decimal(18, 2)
+
+  /// JSON: { stocks: [{gain, heldDays}], crypto: [...], property: [...], metals: [...] }
+  capitalGains Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, financialYear])
+}
+
+/// Optional detailed lots for CGT discount eligibility (held > 12 months).
+model CapitalGainLot {
+  id          String   @id @default(cuid())
+  userId      String
+  assetType   String // STOCK | CRYPTO | PROPERTY | METAL
+  description String?
+  purchaseDate DateTime
+  saleDate    DateTime?
+  costBase    Decimal  @db.Decimal(18, 2)
+  proceeds    Decimal  @db.Decimal(18, 2)
+  discountEligible Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+/// Long-lived preferences / facts for AI advisor (not full chat — use with system prompt).
+model FinancialMemory {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  content   String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Alert {
+  id          String   @id @default(cuid())
+  userId      String
+  type        String // OVERSPEND | ANOMALY | CONCENTRATION | EMI_STRESS
+  severity    String // INFO | WARN | CRITICAL
+  message     String
+  details     Json?
+  acknowledged Boolean @default(false)
+  createdAt   DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, acknowledged])
+}
+
+model FxRate {
+  id        String   @id @default(cuid())
+  base      Currency
+  quote     Currency
+  rate      Decimal  @db.Decimal(18, 8)
+  validDate DateTime @db.Date
+  createdAt DateTime @default(now())
+
+  @@unique([base, quote, validDate])
+}
+
+model PriceCache {
+  id        String   @id @default(cuid())
+  key       String   @unique // e.g. XAU_AUD, XAG_AUD
+  value     Decimal  @db.Decimal(18, 4)
+  fetchedAt DateTime
+}

@@ -1,0 +1,16 @@
+# Local PostgreSQL for development — production should use a managed instance (TLS, backups, HA).
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wealth
+      POSTGRES_PASSWORD: wealth_dev
+      POSTGRES_DB: wealth_intel
+    ports:
+      - "5433:5432"
+    volumes:
+      - wealth_pg:/var/lib/postgresql/data
+
+volumes:
+  wealth_pg:

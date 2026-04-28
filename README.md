@@ -1,36 +1,111 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Wealth Intelligence Platform
 
-## Getting Started
+Production-oriented personal finance dashboard: multi-asset book (including gold/silver with purity and jewellery vs investment classification), cash-flow analytics, Australian tax estimation (educational), loan amortization with early payoff simulation, portfolio analytics hooks, and an OpenAI-powered advisor that receives structured financial context and long-term memory.
 
-First, run the development server:
+## Architecture (high level)
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+- **Frontend:** Next.js App Router, Tailwind CSS, Recharts, `next-themes` (dark/light).
+- **Backend:** Next.js Route Handlers (`src/app/api/**`) — API-first modules under `src/lib/services`, `src/lib/tax`, `src/lib/finance`.
+- **Data:** PostgreSQL + Prisma (`prisma/schema.prisma`). Type-specific fields use JSON `details` for extensibility (brokers, bank feeds later).
+- **Auth:** NextAuth.js with Google OAuth; optional **demo credentials** when `DEMO_AUTH=true` (see seed).
+- **Security:** No secrets in repo; optional AES-GCM for sensitive notes via `ENCRYPTION_KEY`; AI keys server-side only.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Prerequisites
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+- Node.js 18+
+- PostgreSQL 14+ (local Docker Compose file provided), or a hosted Postgres URL
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Setup
 
-## Learn More
+1. **Install dependencies**
 
-To learn more about Next.js, take a look at the following resources:
+   ```bash
+   cd wealth-intelligence-platform
+   npm install
+   ```
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+2. **Configure environment**
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+   ```bash
+   cp .env.example .env
+   ```
 
-## Deploy on Vercel
+   Set at minimum:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+   - `DATABASE_URL` — PostgreSQL connection string.
+   - `NEXTAUTH_SECRET` — `openssl rand -base64 32`
+   - `NEXTAUTH_URL` — e.g. `http://localhost:3000`
+   - **Either** Google OAuth (`GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`) **or** demo auth:
+     - `DEMO_AUTH=true` (local only) and use seeded credentials after `db:seed`.
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+   Optional:
+
+   - `OPENAI_API_KEY` — enables AI advisor.
+   - `ENCRYPTION_KEY` — encrypts optional asset notes at rest.
+   - `METALS_API_URL` / `METALS_API_KEY` — live precious-metal spot feeds (falls back to cached/fallback AUD/oz).
+
+3. **Database**
+
+   ```bash
+   # Start Postgres (example)
+   docker compose up -d
+
+   npx prisma db push
+   npm run db:seed
+   ```
+
+   To **browse data** (this app uses PostgreSQL, not SQLite): use [TablePlus](https://tableplus.com/), [DBeaver](https://dbeaver.io/), [Postico](https://eggerapps.at/postico/), or your host’s SQL console (e.g. Neon). **DB Browser for SQLite** only opens `.db` SQLite files and does not speak PostgreSQL.
+
+4. **Run**
+
+   ```bash
+   npm run dev
+   ```
+
+   `npm run dev` first runs **`scripts/ensure-db.mjs`**: it starts PostgreSQL via **Docker Compose** (if needed), waits until port **5433** accepts connections, then runs **`prisma db push`**.
+
+   - No Docker? Use a **hosted Postgres** URL in `DATABASE_URL`, run `npx prisma db push`, then `SKIP_DB_ENSURE=1 npm run dev`.
+   - Open [http://localhost:3000](http://localhost:3000) — use **`localhost`**, not `127.0.0.1`, to match `NEXTAUTH_URL`.
+
+   With `DEMO_AUTH=true`, sign in as `demo@wealth.local` / `demo123`.
+
+### Google sign-in loops or fails
+
+1. **PostgreSQL must be running** — OAuth uses the Prisma adapter to create/link your user. Start the DB (`docker compose up -d` or a hosted URL), then `npx prisma db push` (and `npm run db:seed` if you use demo data).
+2. **`NEXTAUTH_URL` must match the browser URL** — If you open `http://127.0.0.1:3000`, set `NEXTAUTH_URL=http://127.0.0.1:3000` (not `localhost`). Mismatch breaks cookies and looks like a loop.
+3. **Google Cloud redirect URI** — In [APIs & Services → Credentials](https://console.cloud.google.com/apis/credentials), add exactly:  
+   `http://localhost:3000/api/auth/callback/google` (and the `127.0.0.1` variant if you use it). The OAuth client name (e.g. “Wealth Dashboard”) is the consent screen title, not this repo.
+4. **Read the red error on the login card** — After a failed callback, NextAuth sends you back to `/` with `?error=...`. The app now shows what that code means.
+
+## Scripts
+
+| Script            | Description                |
+| ----------------- | -------------------------- |
+| `npm run dev`     | Next.js dev server         |
+| `npm run build`   | Prisma generate + production build |
+| `npm run db:push` | Apply schema to database   |
+| `npm run db:seed` | Seed demo data             |
+
+## Key folders
+
+| Path | Purpose |
+| ---- | ------- |
+| `prisma/schema.prisma` | Data model (assets, expenses, loans, tax profiles, snapshots, alerts, FX cache) |
+| `src/lib/services/` | Dashboard, metals pricing, AI advisor orchestration |
+| `src/lib/tax/` | AU resident tax estimation (simplified) |
+| `src/lib/finance/` | Amortization, FX conversion |
+| `src/app/api/` | REST-style API routes |
+| `src/app/(app)/` | Authenticated UI (dashboard, assets, …) |
+
+## API & prompts
+
+- HTTP API reference: [`docs/API.md`](docs/API.md)
+- Example advisor prompts: [`docs/example-prompts.md`](docs/example-prompts.md)
+
+## Compliance & disclaimers
+
+Tax and AI outputs are **educational** and **not** personal tax or financial advice. Wire a registered tax agent and licensed adviser for real decisions.
+
+## Licence
+
+Private / unlicensed — adjust for your deployment.
