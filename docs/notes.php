@@ -6,25 +6,33 @@ if (!$selectedNote) {
     exit;
 }
 
-// Only allow files inside the two known note directories
+// Reject null bytes outright
+if (strpos($selectedNote, "\0") !== false) {
+    http_response_code(400);
+    exit;
+}
+
+$appRoot = '/www/app';
 $allowedDirs = [
-    'rick_and_morty_notes' => '/www/app/rick_and_morty_notes',
-    'my_notes'             => '/www/app/my_notes',
+    realpath($appRoot . '/rick_and_morty_notes'),
+    realpath($appRoot . '/my_notes'),
 ];
 
+// Accept relative paths (my_notes/x.md, ./my_notes/x.md) and absolute /www/app/... paths
+$requested = $selectedNote;
+if (strpos($requested, $appRoot . '/') === 0) {
+    $requested = substr($requested, strlen($appRoot) + 1);
+}
+$file = realpath($appRoot . '/' . ltrim($requested, '/'));
+
 $noteContent = null;
-$parts = explode('/', $selectedNote);
-
-if (count($parts) === 2 && isset($allowedDirs[$parts[0]])) {
-    $baseDir = realpath($allowedDirs[$parts[0]]);
-    $file    = realpath($baseDir . '/' . basename($parts[1]));
-
-    // Must resolve inside the base dir, be a regular file, and be a .md note
-    if ($file !== false
-        && strpos($file, $baseDir . DIRECTORY_SEPARATOR) === 0
-        && is_file($file)
-        && pathinfo($file, PATHINFO_EXTENSION) === 'md') {
-        $noteContent = file_get_contents($file);
+if ($file !== false && is_file($file) && pathinfo($file, PATHINFO_EXTENSION) === 'md') {
+    foreach ($allowedDirs as $dir) {
+        // realpath() has already resolved ../ and symlinks, so this prefix check is reliable
+        if ($dir !== false && strpos($file, $dir . DIRECTORY_SEPARATOR) === 0) {
+            $noteContent = file_get_contents($file);
+            break;
+        }
     }
 }
 
